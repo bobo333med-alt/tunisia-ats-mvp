@@ -110,5 +110,4 @@ def results(job_id:str,x_api_key:str|None=Header(default=None)):
 
 @app.get('/api/candidates/search')
 def search(q:str,x_api_key:str|None=Header(default=None)):
-    auth(x_api_key); c=db(); rows=c.execute('SELECT id,name,email,filename,skills FROM candidates WHERE raw_text LIKE ? LIMIT 100',('%'+q+'%',)).fetchall(); c.close(); return [dict(r) for r in rows]
-'''
+    auth(x_api_key); c=db(); rows=c.execute('SELECT id,name,email,filename,skills FROM candidates WHERE raw_text LIKE ? LIMIT 100',('%'+q+'%',)).fetchall(); c.close(); return [dict(r) for r in rows

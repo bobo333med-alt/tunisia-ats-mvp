@@ -74,23 +74,136 @@ def auth(x_api_key):
     if x_api_key is None: return
     if x_api_key != API_KEY: raise HTTPException(401,'Invalid API key')
 
-@app.on_event('startup'
+@app@app.on_event('startup')
+def startup():
+    db().close()
+
+
 @app.post('/api/jobs/{job_id}/candidates')
-async def candidates(job_id:str,files:list[UploadFile]=File(...),x_api_key:str|None=Header(default=None)):
-    auth(x_api_key); c=db(); job=c.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()
-    if not job: raise HTTPException(404,'Job not found')
-    ranked=[]
+async def candidates(
+    job_id: str,
+    files: list[UploadFile] = File(...),
+    x_api_key: str | None = Header(default=None)
+):
+    auth(x_api_key)
+
+    c = db()
+    job = c.execute(
+        'SELECT * FROM jobs WHERE id=?',
+        (job_id,)
+    ).fetchone()
+
+    if not job:
+        c.close()
+        raise HTTPException(404, 'Job not found')
+
+    ranked = []
+
     for f in files:
-        data=await f.read()
+        data = await f.read()
+
         try:
-            text=extract_text(f.filename,data)
+            text = extract_text(f.filename, data)
         except ValueError as e:
-            raise HTTPException(400,str(e))
-        name,email,phone,skills,education,experience=parse_candidate(text); cid=str(uuid.uuid4())
-        c.execute('INSERT INTO candidates VALUES(?,?,?,?,?,?,?,?,?,?,?)',(cid,f.filename,name,email,phone,'',skills,education,experience,text,datetime.utcnow().isoformat()))
-        cand={'raw_text':text}; score,ss,sem,ex,missing,explain=match(job,cand); status='shortlist' if score>=70 else ('review' if score>=50 else 'reject')
-        aid=str(uuid.uuid4()); c.execute('INSERT INTO applications VALUES(?,?,?,?,?,?,?,?,?,?,?)',(aid,job_id,cid,score,ss,sem,ex,','.join(missing),status,explain,datetime.utcnow().isoformat()))
-        ranked.append({'id':cid,'filename':f.filename,'name':name,'email':email,'score':score,'skill_score':round(ss,1),'semantic_score':round(sem,1),'experience_score':round(ex,1),'missing':missing,'status':status,'explanation':explain})
+            c.close()
+            raise HTTPException(400, str(e))
+        except Exception:
+            c.close()
+            raise HTTPException(
+                400,
+                f'Could not read file: {f.filename}'
+            )
+
+        name, email, phone, skills, education, experience = parse_candidate(text)
+
+        cid = str(uuid.uuid4())
+
+        c.execute(
+            'INSERT INTO candidates VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                cid,
+                f.filename,
+                name,
+                email,
+                phone,
+                '',
+                skills,
+                education,
+                experience,
+                text,
+                datetime.utcnow().isoformat()
+            )
+        )
+
+        cand = {'raw_text': text}
+
+        score, ss, sem, ex, missing, explain = match(
+            job,
+            cand
+        )
+
+        status = (
+            'shortlist'
+            if score >= 70
+            else 'review'
+            if score >= 50
+            else 'reject'
+        )
+
+        aid = str(uuid.uuid4())
+
+        c.execute(
+            'INSERT INTO applications VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                aid,
+                job_id,
+                cid,
+                score,
+                ss,
+                sem,
+                ex,
+                ','.join(missing),
+                status,
+                explain,
+                datetime.utcnow().isoformat()
+            )
+        )
+
+        ranked.append({
+            'id': cid,
+            'filename': f.filename,
+            'name': name,
+            'email': email,
+            'score': score,
+            'skill_score': round(ss, 1),
+            'semantic_score': round(sem, 1),
+            'experience_score': round(ex, 1),
+            'missing': missing,
+            'status': status,
+            'explanation': explain
+        })
+
+    c.commit()
+    c.close()
+
+    ranked.sort(
+        key=lambda x: x['score'],
+        reverse=True
+    )
+
+    audit(
+        'bulk_import',
+        f'{job_id}:{len(ranked)}'
+    )
+
+    return {
+        'job_id': job_id,
+        'count': len(ranked),
+        'files_received': [
+            x['filename'] for x in ranked
+        ],
+        'ranked': ranked
+    }
     c.commit(); c.close(); ranked.sort(key=lambda x:x['score'],reverse=True); audit('bulk_import',f'{job_id}:{len(ranked)}'); return {'job_id':job_id,'count':len(ranked),'files_received':[x['filename'] for x in ranked],'ranked':ranked}
 
 @app.get('/api/jobs/{job_id}/results')

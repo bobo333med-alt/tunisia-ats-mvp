@@ -302,3 +302,63 @@ def root():
       </ul>
     </body></html>
     """
+
+
+@app.get('/upload', response_class=HTMLResponse)
+def upload_page():
+    return """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload CVs - Tunisia ATS</title>
+<style>
+  body{font-family:-apple-system,sans-serif;max-width:520px;margin:20px auto;padding:15px;background:#f9fafb;color:#111}
+  h1{font-size:20px;color:#1e40af}
+  label{display:block;margin-top:14px;font-weight:600;font-size:14px}
+  input,button{width:100%;padding:12px;font-size:16px;box-sizing:border-box;margin:6px 0;border:1px solid #d1d5db;border-radius:8px;background:#fff}
+  button{background:#2563eb;color:#fff;border:none;font-weight:600;margin-top:18px}
+  button:active{background:#1e40af}
+  pre{background:#111827;color:#10b981;padding:12px;overflow-x:auto;font-size:12px;border-radius:8px;max-height:400px}
+  .hint{font-size:12px;color:#6b7280;margin-top:-4px}
+</style>
+</head>
+<body>
+<h1>📄 رفع السير الذاتية — Tunisia ATS</h1>
+
+<label>معرّف الوظيفة (Job ID)</label>
+<input id="job_id" placeholder="73e1aa36-..." autocomplete="off">
+
+<label>مفتاح API</label>
+<input id="api_key" type="password" placeholder="tunisia123" autocomplete="off">
+
+<label>ملفات السير الذاتية (PDF, DOCX, TXT)</label>
+<input id="files" type="file" multiple accept=".pdf,.docx,.txt,.md">
+<p class="hint">يمكنك اختيار أكثر من ملف في نفس الوقت</p>
+
+<button onclick="upload()">🚀 ارفع وقيّم</button>
+
+<label>النتيجة</label>
+<pre id="result">—</pre>
+
+<script>
+async function upload(){
+  const jid=document.getElementById('job_id').value.trim();
+  const key=document.getElementById('api_key').value.trim();
+  const fi=document.getElementById('files');
+  const out=document.getElementById('result');
+  if(!jid||!key||!fi.files.length){out.textContent='⚠️ املأ كل الحقول واختر ملفًا واحدًا على الأقل';return;}
+  const fd=new FormData();
+  for(const f of fi.files) fd.append('files',f);
+  out.textContent='⏳ جارٍ الرفع... الرجاء الانتظار';
+  try{
+    const r=await fetch('/api/jobs/'+jid+'/candidates',{method:'POST',headers:{'x-api-key':key},body:fd});
+    const d=await r.json();
+    out.textContent=JSON.stringify(d,null,2);
+  }catch(e){out.textContent='❌ خطأ: '+e.message;}
+}
+</script>
+</body>
+</html>
+    """

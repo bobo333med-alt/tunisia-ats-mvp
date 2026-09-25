@@ -3,37 +3,74 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from pypdf import PdfReader
 from docx import Document
-import sqlite3, io, os, re, uuid, math
+import psycopg2
+import psycopg2.extras
+import io, os, re, uuid, math
 from datetime import datetime
 
-DB = 'ats.db'
+DATABASE_URL = os.getenv('DATABASE_URL')
 API_KEY = os.getenv('ATS_API_KEY', 'demo-change-me')
 app = FastAPI(title='Tunisia ATS Pro', version='1.0')
 
 SCHEMA = '''
-CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,title TEXT,description TEXT,must_have TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS candidates(id TEXT PRIMARY KEY,filename TEXT,name TEXT,email TEXT,phone TEXT,location TEXT,skills TEXT,education TEXT,experience TEXT,raw_text TEXT,created_at TEXT);
-CREATE TABLE IF NOT EXISTS applications(id TEXT PRIMARY KEY,job_id TEXT,candidate_id TEXT,score REAL,skill_score REAL,semantic_score REAL,experience_score REAL,missing TEXT,status TEXT,explanation TEXT,created_at TEXT,UNIQUE(job_id,candidate_id));
-CREATE TABLE IF NOT EXISTS api_keys(id INTEGER PRIMARY KEY,key_hash TEXT UNIQUE,created_at TEXT);
-CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT,detail TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS jobs(
+    id TEXT PRIMARY KEY, title TEXT, description TEXT,
+    must_have TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS candidates(
+    id TEXT PRIMARY KEY, filename TEXT, name TEXT, email TEXT,
+    phone TEXT, location TEXT, skills TEXT, education TEXT,
+    experience TEXT, raw_text TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS applications(
+    id TEXT PRIMARY KEY, job_id TEXT, candidate_id TEXT,
+    score REAL, skill_score REAL, semantic_score REAL,
+    experience_score REAL, missing TEXT, status TEXT,
+    explanation TEXT, created_at TEXT,
+    UNIQUE(job_id, candidate_id));
+CREATE TABLE IF NOT EXISTS api_keys(
+    id SERIAL PRIMARY KEY, key_hash TEXT UNIQUE, created_at TEXT);
+CREATE TABLE IF NOT EXISTS audit(
+    id SERIAL PRIMARY KEY, event TEXT, detail TEXT, created_at TEXT);
 '''
 
 
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
-    return c
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute(SCHEMA)
+    conn.commit()
+    cur.close()
+    return conn
+
+
+def q_one(conn, sql, params=()):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(sql, params)
+    row = cur.fetchone()
+    cur.close()
+    return dict(row) if row else None
+
+
+def q_all(conn, sql, params=()):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cur.close()
+    return [dict(r) for r in rows]
+
+
+def q_run(conn, sql, params=()):
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    cur.close()
 
 
 def audit(event, detail):
-    c = db()
-    c.execute(
-        'INSERT INTO audit(event,detail,created_at) VALUES(?,?,?)',
-        (event, detail, datetime.utcnow().isoformat())
-    )
-    c.commit()
-    c.close()
+    conn = db()
+    q_run(conn,
+          'INSERT INTO audit(event,detail,created_at) VALUES(%s,%s,%s)',
+          (event, detail, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
 
 
 def tokens(s):
@@ -124,51 +161,40 @@ def auth(x_api_key):
         raise HTTPException(401, 'Invalid API key')
 
 
-# ---------- Lifecycle ----------
 @app.on_event('startup')
 def startup():
     db().close()
 
 
-# ---------- Health ----------
 @app.api_route('/health', methods=['GET', 'HEAD'])
 def health():
     return {'status': 'ok', 'service': 'Tunisia ATS', 'version': '1.0'}
 
 
-# ---------- Jobs ----------
 @app.post('/api/jobs')
 def create_job(job: Job, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
     jid = str(uuid.uuid4())
-    c = db()
-    c.execute(
-        'INSERT INTO jobs VALUES(?,?,?,?,?)',
-        (jid, job.title, job.description, job.must_have,
-         datetime.utcnow().isoformat())
-    )
-    c.commit()
-    c.close()
+    conn = db()
+    q_run(conn,
+          'INSERT INTO jobs VALUES(%s,%s,%s,%s,%s)',
+          (jid, job.title, job.description, job.must_have,
+           datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
     audit('job_created', jid)
-    return {
-        'id': jid,
-        'title': job.title,
-        'must_have': job.must_have
-    }
+    return {'id': jid, 'title': job.title, 'must_have': job.must_have}
 
 
 @app.get('/api/jobs')
 def list_jobs(x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
-    c = db()
-    rows = c.execute(
-        'SELECT * FROM jobs ORDER BY created_at DESC'
-    ).fetchall()
-    c.close()
-    return [dict(r) for r in rows]
+    conn = db()
+    rows = q_all(conn, 'SELECT * FROM jobs ORDER BY created_at DESC')
+    conn.close()
+    return rows
 
 
-# ---------- Candidates upload + ranking ----------
 @app.post('/api/jobs/{job_id}/candidates')
 async def candidates(
     job_id: str,
@@ -177,10 +203,10 @@ async def candidates(
 ):
     auth(x_api_key)
 
-    c = db()
-    job = c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+    conn = db()
+    job = q_one(conn, 'SELECT * FROM jobs WHERE id=%s', (job_id,))
     if not job:
-        c.close()
+        conn.close()
         raise HTTPException(404, 'Job not found')
 
     ranked = []
@@ -191,23 +217,20 @@ async def candidates(
         try:
             text = extract_text(f.filename, data)
         except ValueError as e:
-            c.close()
+            conn.close()
             raise HTTPException(400, str(e))
         except Exception:
-            c.close()
+            conn.close()
             raise HTTPException(400, f'Could not read file: {f.filename}')
 
         name, email, phone, skills, education, experience = parse_candidate(text)
 
         cid = str(uuid.uuid4())
-        c.execute(
-            'INSERT INTO candidates VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-            (
-                cid, f.filename, name, email, phone, '',
-                skills, education, experience, text,
-                datetime.utcnow().isoformat()
-            )
-        )
+        q_run(conn,
+              'INSERT INTO candidates VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+              (cid, f.filename, name, email, phone, '',
+               skills, education, experience, text,
+               datetime.utcnow().isoformat()))
 
         cand = {'raw_text': text}
         score, ss, sem, ex, missing, explain = match(job, cand)
@@ -219,14 +242,11 @@ async def candidates(
         )
 
         aid = str(uuid.uuid4())
-        c.execute(
-            'INSERT INTO applications VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-            (
-                aid, job_id, cid, score, ss, sem, ex,
-                ','.join(missing), status, explain,
-                datetime.utcnow().isoformat()
-            )
-        )
+        q_run(conn,
+              'INSERT INTO applications VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+              (aid, job_id, cid, score, ss, sem, ex,
+               ','.join(missing), status, explain,
+               datetime.utcnow().isoformat()))
 
         ranked.append({
             'id': cid,
@@ -242,8 +262,8 @@ async def candidates(
             'explanation': explain
         })
 
-    c.commit()
-    c.close()
+    conn.commit()
+    conn.close()
 
     ranked.sort(key=lambda x: x['score'], reverse=True)
 
@@ -257,37 +277,32 @@ async def candidates(
     }
 
 
-# ---------- Results ----------
 @app.get('/api/jobs/{job_id}/results')
 def results(job_id: str, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
-    c = db()
-    rows = c.execute(
-        '''SELECT a.*,c.name,c.email,c.filename
-           FROM applications a
-           JOIN candidates c ON c.id=a.candidate_id
-           WHERE a.job_id=?
-           ORDER BY a.score DESC''',
-        (job_id,)
-    ).fetchall()
-    c.close()
-    return [dict(r) for r in rows]
+    conn = db()
+    rows = q_all(conn,
+                 '''SELECT a.*, c.name, c.email, c.filename
+                    FROM applications a
+                    JOIN candidates c ON c.id = a.candidate_id
+                    WHERE a.job_id = %s
+                    ORDER BY a.score DESC''',
+                 (job_id,))
+    conn.close()
+    return rows
 
 
-# ---------- Search ----------
 @app.get('/api/candidates/search')
 def search(q: str, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
-    c = db()
-    rows = c.execute(
-        'SELECT id,name,email,filename,skills FROM candidates WHERE raw_text LIKE ? LIMIT 100',
-        ('%' + q + '%',)
-    ).fetchall()
-    c.close()
-    return [dict(r) for r in rows]
+    conn = db()
+    rows = q_all(conn,
+                 'SELECT id,name,email,filename,skills FROM candidates WHERE raw_text LIKE %s LIMIT 100',
+                 ('%' + q + '%',))
+    conn.close()
+    return rows
 
 
-# ---------- Root ----------
 @app.get('/', response_class=HTMLResponse)
 def root():
     return """
@@ -296,6 +311,7 @@ def root():
       <h1>Tunisia ATS API</h1>
       <p>Status: <b style="color:green">online</b></p>
       <ul>
+        <li><a href="/upload">📄 رفع السير الذاتية</a></li>
         <li><a href="/docs">/docs</a> — Swagger UI</li>
         <li><a href="/openapi.json">/openapi.json</a></li>
         <li><a href="/health">/health</a></li>

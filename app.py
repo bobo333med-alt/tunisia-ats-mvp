@@ -318,8 +318,6 @@ def root():
       </ul>
     </body></html>
     """
-
-
 @app.get('/upload', response_class=HTMLResponse)
 def upload_page():
     return """

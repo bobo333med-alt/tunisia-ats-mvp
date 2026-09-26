@@ -350,7 +350,7 @@ def upload_page():
 <input id="api_key" type="password" placeholder="tunisia123" autocomplete="off">
 
 <label>ملفات السير الذاتية (PDF, DOCX, TXT)</label>
-<input id="files" type="file" multiple accept=".pdf,.docx,.txt,.md">
+<input id="files" type="file" multiple>
 <p class="hint">يمكنك اختيار أكثر من ملف في نفس الوقت</p>
 
 <button onclick="upload()">🚀 ارفع وقيّم</button>

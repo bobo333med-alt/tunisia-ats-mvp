@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header
 from fastapi.responses import HTMLResponse
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 from pypdf import PdfReader
 from docx import Document
@@ -65,16 +66,19 @@ def q_run(conn, sql, params=()):
 
 
 def audit(event, detail):
-    conn = db()
-    q_run(conn,
-          'INSERT INTO audit(event,detail,created_at) VALUES(%s,%s,%s)',
-          (event, detail, datetime.utcnow().isoformat()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = db()
+        q_run(conn,
+              'INSERT INTO audit(event,detail,created_at) VALUES(%s,%s,%s)',
+              (event, detail, datetime.utcnow().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 def tokens(s):
-    return set(re.findall(r'[\wÀ-ÿ+#.-]{2,}', (s or '').lower()))
+    return set(re.findall(r'[\w\u00C0-\u00FF+#.-]{2,}', (s or '').lower()))
 
 
 def extract_text(name, data):
@@ -87,7 +91,7 @@ def extract_text(name, data):
         return '\n'.join(p.text for p in d.paragraphs)
     if ext in ('.txt', '.md'):
         return data.decode('utf-8', 'ignore')
-    raise ValueError('PDF, DOCX and TXT are supported in this demo.')
+    raise ValueError('Only PDF, DOCX and TXT are supported.')
 
 
 def first(pattern, text):
@@ -132,7 +136,7 @@ def match(job, cand):
     semantic = cosine(jd, cand['raw_text'])
     years = [
         int(x) for x in re.findall(
-            r'(\d{1,2})\s*(?:years?|ans|سنوات)',
+            r'(\d{1,2})\s*(?:years?|ans|\u0633\u0646\u0648\u0627\u062A)',
             cand['raw_text'],
             re.I
         )
@@ -161,16 +165,22 @@ def auth(x_api_key):
         raise HTTPException(401, 'Invalid API key')
 
 
+# ---------- Lifecycle ----------
 @app.on_event('startup')
 def startup():
-    db().close()
+    try:
+        db().close()
+    except Exception:
+        pass
 
 
+# ---------- Health ----------
 @app.api_route('/health', methods=['GET', 'HEAD'])
 def health():
     return {'status': 'ok', 'service': 'Tunisia ATS', 'version': '1.0'}
 
 
+# ---------- Jobs ----------
 @app.post('/api/jobs')
 def create_job(job: Job, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
@@ -195,6 +205,7 @@ def list_jobs(x_api_key: str | None = Header(default=None)):
     return rows
 
 
+# ---------- Candidates upload + ranking ----------
 @app.post('/api/jobs/{job_id}/candidates')
 async def candidates(
     job_id: str,
@@ -277,6 +288,7 @@ async def candidates(
     }
 
 
+# ---------- Results ----------
 @app.get('/api/jobs/{job_id}/results')
 def results(job_id: str, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
@@ -292,6 +304,7 @@ def results(job_id: str, x_api_key: str | None = Header(default=None)):
     return rows
 
 
+# ---------- Search ----------
 @app.get('/api/candidates/search')
 def search(q: str, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
@@ -303,76 +316,178 @@ def search(q: str, x_api_key: str | None = Header(default=None)):
     return rows
 
 
+# ---------- Root ----------
 @app.get('/', response_class=HTMLResponse)
 def root():
     return """
-    <html><head><title>Tunisia ATS API</title></head>
-    <body style="font-family:sans-serif;max-width:640px;margin:40px auto;padding:0 20px">
-      <h1>Tunisia ATS API</h1>
-      <p>Status: <b style="color:green">online</b></p>
-      <ul>
-        <li><a href="/upload">📄 رفع السير الذاتية</a></li>
-        <li><a href="/docs">/docs</a> — Swagger UI</li>
-        <li><a href="/openapi.json">/openapi.json</a></li>
-        <li><a href="/health">/health</a></li>
-      </ul>
-    </body></html>
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tunisia ATS API</title>
+<style>
+  body{font-family:-apple-system,sans-serif;max-width:520px;margin:40px auto;padding:0 20px;background:#f9fafb;color:#111}
+  h1{color:#1e40af;text-align:center}
+  .status{text-align:center;font-size:18px;margin:20px 0}
+  .status b{color:#059669}
+  ul{list-style:none;padding:0;margin-top:30px}
+  li{margin:12px 0}
+  li a{
+    display:block;padding:14px;background:#fff;border:1px solid #d1d5db;
+    border-radius:10px;text-decoration:none;color:#1e40af;font-weight:600;
+    font-size:16px;text-align:center;
+  }
+  li a:active{background:#f3f4f6}
+</style>
+</head>
+<body>
+  <h1>Tunisia ATS API</h1>
+  <p class="status">الحالة: <b>يعمل</b></p>
+  <ul>
+    <li><a href="/upload">📄 رفع السير الذاتية</a></li>
+    <li><a href="/docs">📚 Swagger UI</a></li>
+    <li><a href="/health">💚 فحص الحالة</a></li>
+    <li><a href="/openapi.json">📋 OpenAPI</a></li>
+  </ul>
+</body>
+</html>
     """
+
+
+# ---------- Upload page (mobile-friendly) ----------
 @app.get('/upload', response_class=HTMLResponse)
 def upload_page():
     return """
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Upload CVs - Tunisia ATS</title>
+<title>رفع السير الذاتية - Tunisia ATS</title>
 <style>
+  *{box-sizing:border-box}
   body{font-family:-apple-system,sans-serif;max-width:520px;margin:20px auto;padding:15px;background:#f9fafb;color:#111}
-  h1{font-size:20px;color:#1e40af}
-  label{display:block;margin-top:14px;font-weight:600;font-size:14px}
-  input,button{width:100%;padding:12px;font-size:16px;box-sizing:border-box;margin:6px 0;border:1px solid #d1d5db;border-radius:8px;background:#fff}
-  button{background:#2563eb;color:#fff;border:none;font-weight:600;margin-top:18px}
-  button:active{background:#1e40af}
-  pre{background:#111827;color:#10b981;padding:12px;overflow-x:auto;font-size:12px;border-radius:8px;max-height:400px}
-  .hint{font-size:12px;color:#6b7280;margin-top:-4px}
+  h1{font-size:20px;color:#1e40af;text-align:center}
+  label.field{display:block;margin-top:14px;font-weight:600;font-size:14px;margin-bottom:6px}
+  input[type=text],input[type=password]{width:100%;padding:12px;font-size:16px;border:1px solid #d1d5db;border-radius:8px;background:#fff}
+  .file-btn{
+    display:block;width:100%;padding:20px 14px;
+    background:#f3f4f6;border:2px dashed #9ca3af;border-radius:10px;
+    text-align:center;font-size:16px;font-weight:600;color:#374151;
+    cursor:pointer;margin-top:6px;user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .file-btn:active{background:#e5e7eb}
+  #files{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+  .hint{font-size:12px;color:#6b7280;margin-top:6px;text-align:center}
+  .selected{font-size:13px;color:#059669;margin-top:8px;text-align:center;font-weight:600}
+  button.main{
+    width:100%;padding:16px;font-size:17px;
+    background:#2563eb;color:#fff;border:none;border-radius:10px;
+    font-weight:700;margin-top:18px;
+    -webkit-tap-highlight-color:transparent;
+  }
+  button.main:active{background:#1e40af}
+  pre{background:#111827;color:#10b981;padding:12px;overflow-x:auto;font-size:12px;border-radius:8px;max-height:400px;white-space:pre-wrap;word-break:break-all}
 </style>
 </head>
 <body>
 <h1>📄 رفع السير الذاتية — Tunisia ATS</h1>
 
-<label>معرّف الوظيفة (Job ID)</label>
-<input id="job_id" placeholder="73e1aa36-..." autocomplete="off">
+<label class="field" for="job_id">معرّف الوظيفة (Job ID)</label>
+<input id="job_id" type="text" placeholder="c9d62982-..." autocomplete="off" autocapitalize="off">
 
-<label>مفتاح API</label>
-<input id="api_key" type="password" placeholder="tunisia123" autocomplete="off">
+<label class="field" for="api_key">مفتاح API</label>
+<input id="api_key" type="password" placeholder="أدخل المفتاح" autocomplete="off">
 
-<label>ملفات السير الذاتية (PDF, DOCX, TXT)</label>
+<label class="field">ملفات السير الذاتية (PDF, DOCX, TXT)</label>
+
+<label for="files" class="file-btn" id="fileBtn">
+  📎 اضغط هنا لاختيار الملفات
+</label>
 <input id="files" type="file" multiple>
+<div class="selected" id="selectedInfo"></div>
 <p class="hint">يمكنك اختيار أكثر من ملف في نفس الوقت</p>
 
-<button onclick="upload()">🚀 ارفع وقيّم</button>
+<button class="main" onclick="upload()">🚀 ارفع وقيّم</button>
 
-<label>النتيجة</label>
+<label class="field">النتيجة</label>
 <pre id="result">—</pre>
 
 <script>
+var fileInput = document.getElementById('files');
+var selectedInfo = document.getElementById('selectedInfo');
+
+fileInput.addEventListener('change', function(){
+  var n = fileInput.files.length;
+  if(n > 0){
+    var names = [];
+    for(var i=0;i<n;i++) names.push(fileInput.files[i].name);
+    selectedInfo.textContent = '✅ تم اختيار ' + n + ' ملف: ' + names.join('، ');
+  } else {
+    selectedInfo.textContent = '';
+  }
+});
+
 async function upload(){
-  const jid=document.getElementById('job_id').value.trim();
-  const key=document.getElementById('api_key').value.trim();
-  const fi=document.getElementById('files');
-  const out=document.getElementById('result');
-  if(!jid||!key||!fi.files.length){out.textContent='⚠️ املأ كل الحقول واختر ملفًا واحدًا على الأقل';return;}
-  const fd=new FormData();
-  for(const f of fi.files) fd.append('files',f);
-  out.textContent='⏳ جارٍ الرفع... الرجاء الانتظار';
+  var jid = document.getElementById('job_id').value.trim();
+  var key = document.getElementById('api_key').value.trim();
+  var out = document.getElementById('result');
+
+  if(!jid || !key){
+    out.textContent = '⚠️ املأ معرّف الوظيفة ومفتاح API';
+    return;
+  }
+  if(!fileInput.files.length){
+    out.textContent = '⚠️ اختر ملفًا واحدًا على الأقل';
+    return;
+  }
+
+  var fd = new FormData();
+  for(var i=0;i<fileInput.files.length;i++){
+    fd.append('files', fileInput.files[i]);
+  }
+
+  out.textContent = '⏳ جارٍ الرفع... الرجاء الانتظار';
   try{
-    const r=await fetch('/api/jobs/'+jid+'/candidates',{method:'POST',headers:{'x-api-key':key},body:fd});
-    const d=await r.json();
-    out.textContent=JSON.stringify(d,null,2);
-  }catch(e){out.textContent='❌ خطأ: '+e.message;}
+    var r = await fetch('/api/jobs/' + jid + '/candidates', {
+      method: 'POST',
+      headers: {'x-api-key': key},
+      body: fd
+    });
+    var d = await r.json();
+    out.textContent = JSON.stringify(d, null, 2);
+  }catch(e){
+    out.textContent = '❌ خطأ: ' + e.message;
+  }
 }
 </script>
 </body>
 </html>
     """
+
+
+# ---------- OpenAPI fix for Swagger UI file upload ----------
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    for comp in schema.get('components', {}).get('schemas', {}).values():
+        for prop in comp.get('properties', {}).values():
+            if prop.get('contentMediaType') == 'application/octet-stream':
+                del prop['contentMediaType']
+                prop['format'] = 'binary'
+            items = prop.get('items', {})
+            if items.get('contentMediaType') == 'application/octet-stream':
+                del items['contentMediaType']
+                items['format'] = 'binary'
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi

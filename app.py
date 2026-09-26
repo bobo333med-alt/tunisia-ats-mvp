@@ -360,96 +360,243 @@ def root():
 def upload_page():
     return """
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>رفع السير الذاتية - Tunisia ATS</title>
 <style>
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,sans-serif;max-width:520px;margin:20px auto;padding:15px;background:#f9fafb;color:#111}
-  h1{font-size:20px;color:#1e40af;text-align:center}
-  label.field{display:block;margin-top:14px;font-weight:600;font-size:14px;margin-bottom:6px}
-  input[type=text],input[type=password]{width:100%;padding:12px;font-size:16px;border:1px solid #d1d5db;border-radius:8px;background:#fff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;overflow-x:hidden}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:#f3f4f6;color:#111;
+    padding:16px;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+  }
+  .wrap{
+    width:100%;
+    max-width:480px;
+    background:#fff;
+    border-radius:16px;
+    padding:20px;
+    box-shadow:0 2px 10px rgba(0,0,0,.06);
+    margin:auto;
+  }
+  h1{
+    font-size:20px;color:#1e40af;text-align:center;
+    margin-bottom:20px;font-weight:700;
+  }
+  .field{
+    display:block;margin-top:16px;margin-bottom:6px;
+    font-weight:600;font-size:14px;color:#374151;
+    text-align:right;
+  }
+  input[type=text],input[type=password]{
+    width:100%;padding:12px;font-size:16px;
+    border:1px solid #d1d5db;border-radius:10px;
+    background:#fff;text-align:right;
+    direction:ltr;
+  }
+  input[type=text]:focus,input[type=password]:focus{
+    outline:none;border-color:#2563eb;
+  }
   .file-btn{
-    display:block;width:100%;padding:20px 14px;
-    background:#f3f4f6;border:2px dashed #9ca3af;border-radius:10px;
-    text-align:center;font-size:16px;font-weight:600;color:#374151;
-    cursor:pointer;margin-top:6px;user-select:none;
+    display:flex;align-items:center;justify-content:center;
+    width:100%;padding:22px 14px;
+    background:#eff6ff;border:2px dashed #93c5fd;
+    border-radius:12px;
+    font-size:16px;font-weight:600;color:#1e40af;
+    cursor:pointer;margin-top:4px;
+    user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    transition:background .15s;
+  }
+  .file-btn:active{background:#dbeafe}
+  input[type=file]{
+    position:absolute;
+    width:1px;height:1px;
+    opacity:0;
+    pointer-events:none;
+  }
+  .hint{
+    font-size:12px;color:#6b7280;
+    margin-top:8px;text-align:center;
+  }
+  .file-list{
+    margin-top:12px;
+    border:1px solid #e5e7eb;
+    border-radius:10px;
+    padding:10px;
+    background:#f9fafb;
+    display:none;
+  }
+  .file-list.show{display:block}
+  .file-list .title{
+    font-size:13px;font-weight:600;color:#059669;
+    margin-bottom:8px;text-align:right;
+  }
+  .file-item{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 10px;background:#fff;
+    border-radius:8px;margin-bottom:6px;
+    font-size:13px;
+    direction:ltr;
+  }
+  .file-item:last-child{margin-bottom:0}
+  .file-item .name{
+    flex:1;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .file-item .remove{
+    color:#dc2626;font-weight:700;
+    cursor:pointer;padding:4px 10px;
+    font-size:18px;line-height:1;
     -webkit-tap-highlight-color:transparent;
   }
-  .file-btn:active{background:#e5e7eb}
-  #files{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
-  .hint{font-size:12px;color:#6b7280;margin-top:6px;text-align:center}
-  .selected{font-size:13px;color:#059669;margin-top:8px;text-align:center;font-weight:600}
   button.main{
     width:100%;padding:16px;font-size:17px;
-    background:#2563eb;color:#fff;border:none;border-radius:10px;
-    font-weight:700;margin-top:18px;
+    background:#2563eb;color:#fff;
+    border:none;border-radius:12px;
+    font-weight:700;margin-top:20px;
+    cursor:pointer;
     -webkit-tap-highlight-color:transparent;
+    transition:background .15s;
   }
   button.main:active{background:#1e40af}
-  pre{background:#111827;color:#10b981;padding:12px;overflow-x:auto;font-size:12px;border-radius:8px;max-height:400px;white-space:pre-wrap;word-break:break-all}
+  button.main:disabled{
+    background:#9ca3af;cursor:not-allowed;
+  }
+  pre{
+    background:#111827;color:#10b981;
+    padding:12px;border-radius:10px;
+    font-size:12px;
+    overflow-x:auto;
+    max-height:400px;
+    white-space:pre-wrap;
+    word-break:break-all;
+    margin-top:8px;
+    direction:ltr;text-align:left;
+  }
 </style>
 </head>
 <body>
-<h1>📄 رفع السير الذاتية — Tunisia ATS</h1>
+<div class="wrap">
 
-<label class="field" for="job_id">معرّف الوظيفة (Job ID)</label>
-<input id="job_id" type="text" placeholder="c9d62982-..." autocomplete="off" autocapitalize="off">
+  <h1>📄 رفع السير الذاتية<br>Tunisia ATS</h1>
 
-<label class="field" for="api_key">مفتاح API</label>
-<input id="api_key" type="password" placeholder="أدخل المفتاح" autocomplete="off">
+  <label class="field" for="job_id">معرّف الوظيفة (Job ID)</label>
+  <input id="job_id" type="text" placeholder="c9d62982-45b2-..." autocomplete="off" autocapitalize="off" spellcheck="false">
 
-<label class="field">ملفات السير الذاتية (PDF, DOCX, TXT)</label>
+  <label class="field" for="api_key">مفتاح API</label>
+  <input id="api_key" type="password" placeholder="أدخل المفتاح" autocomplete="off">
 
-<label for="files" class="file-btn" id="fileBtn">
-  📎 اضغط هنا لاختيار الملفات
-</label>
-<input id="files" type="file" multiple>
-<div class="selected" id="selectedInfo"></div>
-<p class="hint">يمكنك اختيار أكثر من ملف في نفس الوقت</p>
+  <label class="field">ملفات السير الذاتية (PDF, DOCX, TXT)</label>
 
-<button class="main" onclick="upload()">🚀 ارفع وقيّم</button>
+  <label for="filePicker" class="file-btn">
+    📎 اضغط لاختيار ملف
+  </label>
+  <input id="filePicker" type="file">
 
-<label class="field">النتيجة</label>
-<pre id="result">—</pre>
+  <p class="hint">يمكنك إضافة عدة ملفات — اضغط الزر عدة مرات</p>
+
+  <div class="file-list" id="fileList">
+    <div class="title">✅ الملفات المختارة (<span id="count">0</span>)</div>
+    <div id="items"></div>
+  </div>
+
+  <button class="main" id="uploadBtn" onclick="doUpload()">
+    🚀 ارفع وقيّم
+  </button>
+
+  <label class="field">النتيجة</label>
+  <pre id="result">—</pre>
+
+</div>
 
 <script>
-var fileInput = document.getElementById('files');
-var selectedInfo = document.getElementById('selectedInfo');
+var pickedFiles = [];
+var picker = document.getElementById('filePicker');
+var fileListBox = document.getElementById('fileList');
+var itemsBox = document.getElementById('items');
+var countSpan = document.getElementById('count');
 
-fileInput.addEventListener('change', function(){
-  var n = fileInput.files.length;
-  if(n > 0){
-    var names = [];
-    for(var i=0;i<n;i++) names.push(fileInput.files[i].name);
-    selectedInfo.textContent = '✅ تم اختيار ' + n + ' ملف: ' + names.join('، ');
-  } else {
-    selectedInfo.textContent = '';
+function renderList(){
+  itemsBox.innerHTML = '';
+  countSpan.textContent = pickedFiles.length;
+
+  if(pickedFiles.length === 0){
+    fileListBox.classList.remove('show');
+    return;
   }
+  fileListBox.classList.add('show');
+
+  for(var i=0;i<pickedFiles.length;i++){
+    (function(idx){
+      var f = pickedFiles[idx];
+      var row = document.createElement('div');
+      row.className = 'file-item';
+
+      var nameEl = document.createElement('span');
+      nameEl.className = 'name';
+      nameEl.textContent = (idx+1) + '. ' + f.name;
+
+      var rm = document.createElement('span');
+      rm.className = 'remove';
+      rm.textContent = '✕';
+      rm.onclick = function(){
+        pickedFiles.splice(idx, 1);
+        renderList();
+      };
+
+      row.appendChild(nameEl);
+      row.appendChild(rm);
+      itemsBox.appendChild(row);
+    })(i);
+  }
+}
+
+picker.addEventListener('change', function(){
+  if(!picker.files.length) return;
+  for(var i=0;i<picker.files.length;i++){
+    var f = picker.files[i];
+    var exists = false;
+    for(var j=0;j<pickedFiles.length;j++){
+      if(pickedFiles[j].name === f.name && pickedFiles[j].size === f.size){
+        exists = true; break;
+      }
+    }
+    if(!exists) pickedFiles.push(f);
+  }
+  picker.value = '';
+  renderList();
 });
 
-async function upload(){
+async function doUpload(){
   var jid = document.getElementById('job_id').value.trim();
   var key = document.getElementById('api_key').value.trim();
   var out = document.getElementById('result');
+  var btn = document.getElementById('uploadBtn');
 
   if(!jid || !key){
     out.textContent = '⚠️ املأ معرّف الوظيفة ومفتاح API';
     return;
   }
-  if(!fileInput.files.length){
+  if(pickedFiles.length === 0){
     out.textContent = '⚠️ اختر ملفًا واحدًا على الأقل';
     return;
   }
 
   var fd = new FormData();
-  for(var i=0;i<fileInput.files.length;i++){
-    fd.append('files', fileInput.files[i]);
+  for(var i=0;i<pickedFiles.length;i++){
+    fd.append('files', pickedFiles[i]);
   }
 
-  out.textContent = '⏳ جارٍ الرفع... الرجاء الانتظار';
+  btn.disabled = true;
+  out.textContent = '⏳ جارٍ رفع ' + pickedFiles.length + ' ملف... الرجاء الانتظار';
+
   try{
     var r = await fetch('/api/jobs/' + jid + '/candidates', {
       method: 'POST',
@@ -460,6 +607,8 @@ async function upload(){
     out.textContent = JSON.stringify(d, null, 2);
   }catch(e){
     out.textContent = '❌ خطأ: ' + e.message;
+  }finally{
+    btn.disabled = false;
   }
 }
 </script>
@@ -467,6 +616,30 @@ async function upload(){
 </html>
     """
 
+
+# ---------- OpenAPI fix for Swagger UI file upload ----------
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    for comp in schema.get('components', {}).get('schemas', {}).values():
+        for prop in comp.get('properties', {}).values():
+            if prop.get('contentMediaType') == 'application/octet-stream':
+                del prop['contentMediaType']
+                prop['format'] = 'binary'
+            items = prop.get('items', {})
+            if items.get('contentMediaType') == 'application/octet-stream':
+                del items['contentMediaType']
+                items['format'] = 'binary'
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 # ---------- OpenAPI fix for Swagger UI file upload ----------
 def custom_openapi():

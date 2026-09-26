@@ -664,3 +664,183 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+# ---------- Results page (Arabic UI) ----------
+@app.get('/results/{job_id}', response_class=HTMLResponse)
+def results_page(job_id: str, x_api_key: str | None = None):
+    auth(x_api_key)
+    conn = db()
+    job = q_one(conn, 'SELECT * FROM jobs WHERE id=%s', (job_id,))
+    if not job:
+        conn.close()
+        return HTMLResponse(
+            '<html><body style="font-family:sans-serif;text-align:center;padding:40px">'
+            '<h2>❌ الوظيفة غير موجودة</h2>'
+            '<p>تحقق من معرّف الوظيفة</p></body></html>',
+            status_code=404
+        )
+    rows = q_all(conn,
+                 '''SELECT a.score, a.status, a.missing, a.explanation,
+                           c.name, c.email, c.filename
+                    FROM applications a
+                    JOIN candidates c ON c.id = a.candidate_id
+                    WHERE a.job_id = %s
+                    ORDER BY a.score DESC''',
+                 (job_id,))
+    conn.close()
+
+    # Build rows HTML
+    rows_html = ''
+    shortlist = review = reject = 0
+    for i, r in enumerate(rows, 1):
+        score = r['score'] or 0
+        status = r['status'] or 'review'
+        if status == 'shortlist':
+            shortlist += 1
+            bg = '#dcfce7'; border = '#16a34a'; icon = '✅'; label = 'مؤهل — يوصى بمقابلته'
+        elif status == 'review':
+            review += 1
+            bg = '#fef3c7'; border = '#f59e0b'; icon = '🤔'; label = 'يحتاج مراجعة'
+        else:
+            reject += 1
+            bg = '#fee2e2'; border = '#dc2626'; icon = '❌'; label = 'مرفوض'
+
+        missing = (r['missing'] or '').strip()
+        if missing:
+            missing_html = '<div class="missing">⚠️ ناقص: ' + missing.replace(',', '، ') + '</div>'
+        else:
+            missing_html = '<div class="missing ok">✅ كل المهارات موجودة</div>'
+
+        name = r['name'] or 'بدون اسم'
+        email = r['email'] or '—'
+        filename = r['filename'] or '—'
+
+        rows_html += f'''
+        <div class="card" style="background:{bg};border-right:6px solid {border}">
+          <div class="rank">#{i}</div>
+          <div class="name">{icon} {name}</div>
+          <div class="score">{score}</div>
+          <div class="score-label">/ 100</div>
+          <div class="status">{label}</div>
+          <div class="meta">📧 {email}</div>
+          <div class="meta">📄 {filename}</div>
+          {missing_html}
+        </div>'''
+
+    total = len(rows)
+    if total == 0:
+        rows_html = '<div class="empty">لا يوجد مرشحون لهذه الوظيفة بعد</div>'
+
+    title = job.get('title', 'وظيفة') if isinstance(job, dict) else job['title']
+    must = job.get('must_have', '') if isinstance(job, dict) else job['must_have']
+
+    html = f'''<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>النتائج - {title}</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111;padding:16px;line-height:1.5}}
+  .wrap{{max-width:640px;margin:0 auto}}
+  .header{{background:#fff;border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}}
+  h1{{font-size:20px;color:#1e40af;margin-bottom:8px}}
+  .job-title{{font-size:15px;color:#374151;font-weight:600;margin-top:10px}}
+  .must-have{{font-size:13px;color:#6b7280;margin-top:6px}}
+  .stats{{display:flex;gap:8px;margin-top:14px}}
+  .stat{{flex:1;text-align:center;padding:10px;border-radius:10px;font-size:12px;font-weight:600}}
+  .stat.green{{background:#dcfce7;color:#166534}}
+  .stat.yellow{{background:#fef3c7;color:#92400e}}
+  .stat.red{{background:#fee2e2;color:#991b1b}}
+  .stat .num{{display:block;font-size:22px;margin-bottom:2px}}
+  .card{{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;position:relative;box-shadow:0 1px 4px rgba(0,0,0,.05)}}
+  .rank{{position:absolute;top:12px;left:14px;background:#1e40af;color:#fff;font-weight:700;font-size:13px;padding:3px 10px;border-radius:20px}}
+  .name{{font-size:17px;font-weight:700;color:#111;margin-bottom:6px;padding-left:50px}}
+  .score{{display:inline-block;font-size:24px;font-weight:800;color:#1e40af}}
+  .score-label{{display:inline-block;font-size:12px;color:#6b7280;margin-right:4px}}
+  .status{{font-size:13px;font-weight:600;margin-top:4px;color:#374151}}
+  .meta{{font-size:13px;color:#4b5563;margin-top:4px;word-break:break-all;direction:ltr;text-align:right}}
+  .missing{{font-size:13px;color:#991b1b;margin-top:8px;padding:8px;background:#fff;border-radius:6px}}
+  .missing.ok{{color:#166534}}
+  .empty{{text-align:center;padding:60px 20px;color:#6b7280;font-size:15px}}
+  .actions{{text-align:center;margin-top:20px}}
+  .btn{{display:inline-block;padding:14px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:10px;font-weight:700;font-size:15px;margin:4px}}
+  .btn.green{{background:#16a34a}}
+  .btn:active{{opacity:.85}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>📊 نتائج فرز السير الذاتية</h1>
+    <div class="job-title">💼 {title}</div>
+    <div class="must-have">🎯 المهارات المطلوبة: {must}</div>
+    <div class="stats">
+      <div class="stat green"><span class="num">{shortlist}</span>مؤهل</div>
+      <div class="stat yellow"><span class="num">{review}</span>مراجعة</div>
+      <div class="stat red"><span class="num">{reject}</span>مرفوض</div>
+    </div>
+  </div>
+
+  {rows_html}
+
+  <div class="actions">
+    <a class="btn green" href="/api/jobs/{job_id}/export.csv?x_api_key={x_api_key or ''}">📥 تحميل Excel (CSV)</a>
+    <a class="btn" href="/upload">🔄 رفع CVs جديد</a>
+  </div>
+</div>
+</body>
+</html>'''
+    return html
+
+
+# ---------- CSV Export ----------
+@app.get('/api/jobs/{job_id}/export.csv')
+def export_csv(job_id: str, x_api_key: str | None = None):
+    auth(x_api_key)
+    conn = db()
+    job = q_one(conn, 'SELECT title FROM jobs WHERE id=%s', (job_id,))
+    if not job:
+        conn.close()
+        raise HTTPException(404, 'Job not found')
+
+    rows = q_all(conn,
+                 '''SELECT a.score, a.status, a.skill_score, a.semantic_score,
+                           a.experience_score, a.missing,
+                           c.name, c.email, c.phone, c.filename
+                    FROM applications a
+                    JOIN candidates c ON c.id = a.candidate_id
+                    WHERE a.job_id = %s
+                    ORDER BY a.score DESC''',
+                 (job_id,))
+    conn.close()
+
+    def esc(v):
+        if v is None: return ''
+        s = str(v).replace('"', '""')
+        if any(ch in s for ch in [',', '"', '\n']):
+            return '"' + s + '"'
+        return s
+
+    lines = ['الترتيب,الاسم,البريد,الهاتف,الملف,الدرجة,المهارات,الدلالي,الخبرة,الحالة,الناقص']
+    for i, r in enumerate(rows, 1):
+        lines.append(','.join([
+            str(i),
+            esc(r['name']),
+            esc(r['email']),
+            esc(r['phone']),
+            esc(r['filename']),
+            str(r['score'] or 0),
+            str(r['skill_score'] or 0),
+            str(r['semantic_score'] or 0),
+            str(r['experience_score'] or 0),
+            esc(r['status']),
+            esc(r['missing']),
+        ]))
+
+    csv = '\ufeff' + '\n'.join(lines)  # BOM for Excel Arabic support
+    return HTMLResponse(
+        content=csv,
+        media_type='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="results_{job_id[:8]}.csv"'}
+    )

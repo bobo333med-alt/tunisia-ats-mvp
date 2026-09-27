@@ -181,10 +181,19 @@ def health():
 
 
 # ---------- Jobs ----------
-@app.post('/api/jobs')
-def create_job(job: Job, x_api_key: str | None = Header(default=None)):
+@app.post('/api/jobs/{job_id}/candidates')
+async def candidates(
+    job_id: str,
+    files: list[UploadFile] = File(...),
+    x_api_key: str | None = Header(default=None)
+):
     auth(x_api_key)
-    jid = str(uuid.uuid4())
+
+    # تجاهل المسافات في معرّف الوظيفة
+    job_id = job_id.strip()
+    if x_api_key:
+        x_api_key = x_api_key.strip()
+
     conn = db()
     q_run(conn,
           'INSERT INTO jobs VALUES(%s,%s,%s,%s,%s)',

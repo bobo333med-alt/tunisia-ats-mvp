@@ -292,9 +292,23 @@ async def candidates(
 
 
 @app.get('/api/jobs/{job_id}/results')
-def results(job_id: str, x_api_key: str | None = Header(default=None)):
+@app.get('/api/jobs/{job_id}/results')
+def results(
+    job_id: str,
+    x_api_key: str | None = Header(default=None),
+    accept: str | None = Header(default=None)
+):
     auth(x_api_key)
     job_id = clean(job_id)
+
+    if accept and 'text/html' in accept:
+        from fastapi.responses import RedirectResponse
+        key = x_api_key or ''
+        return RedirectResponse(
+            url=f'/results/{job_id}?x_api_key={key}',
+            status_code=307
+        )
+
     conn = db()
     rows = q_all(conn,
                  '''SELECT a.*, c.name, c.email, c.filename

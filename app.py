@@ -661,7 +661,7 @@ function msg(key){
   var L = document.body.getAttribute('data-lang') || 'ar';
   var M = {
     fill: {ar:'⚠️ املأ معرّف الوظيفة ومفتاح API',
-           fr:'⚠️ Remplissez l\\'ID et la clé API',
+           fr:'⚠️ Remplissez votre ID et la clé API  ',
            en:'⚠️ Fill Job ID and API Key'},
     pick: {ar:'⚠️ اختر ملفًا واحدًا على الأقل',
            fr:'⚠️ Choisissez au moins un fichier',
@@ -821,7 +821,7 @@ def results_page(job_id: str, x_api_key: str | None = None):
     if not rows:
         rows_html = ('<div class="empty">'
                     '<span class="lang-ar inline">لا يوجد مرشحون بعد</span>'
-                    '<span class="lang-fr inline">Aucun candidat pour l\\'instant</span>'
+                    '<span class="lang-fr inline">Aucun candidat pour le moment</span>'
                     '<span class="lang-en inline">No candidates yet</span>'
                     '</div>')
 

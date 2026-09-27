@@ -604,7 +604,14 @@ async function doUpload(){
       body: fd
     });
     var d = await r.json();
-    out.textContent = JSON.stringify(d, null, 2);
+          if(d.count > 0){
+        out.textContent = '✅ تم رفع ' + d.count + ' ملف بنجاح!\n⏳ جارٍ التحويل إلى صفحة النتائج...';
+        setTimeout(function(){
+          window.location.href = '/results/' + jid + '?x_api_key=' + encodeURIComponent(key);
+        }, 1500);
+      } else {
+        out.textContent = JSON.stringify(d, null, 2);
+      }
   }catch(e){
     out.textContent = '❌ خطأ: ' + e.message;
   }finally{

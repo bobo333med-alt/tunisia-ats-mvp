@@ -113,8 +113,9 @@ def parse_candidate(text):
         'python', 'java', 'javascript', 'typescript', 'react', 'flutter',
         'sql', 'excel', 'word', 'powerpoint', 'fastapi', 'docker', 'git',
         'linux', 'ai', 'machine learning', 'recruitment', 'sales',
-        'marketing', 'accounting', 'mechanic', 'automotive', 'comptabilite',
-        'fiscalite', 'declaration', 'english', 'french', 'arabic'
+        'marketing', 'accounting', 'mechanic', 'automotive',
+        'comptabilite', 'fiscalite', 'declaration',
+        'english', 'french', 'arabic'
     ]
     low = text.lower()
     for s in common:
@@ -168,9 +169,7 @@ def auth(x_api_key):
         raise HTTPException(401, 'Invalid API key')
 
 
-# ============================================================
-# Lifecycle
-# ============================================================
+# ============ Lifecycle ============
 @app.on_event('startup')
 def startup():
     try:
@@ -179,30 +178,26 @@ def startup():
         pass
 
 
-# ============================================================
-# Health (browser-friendly + UptimeRobot-friendly)
-# ============================================================
+# ============ Health ============
 @app.api_route('/health', methods=['GET', 'HEAD'])
-def health(request: Request, accept: str | None = Header(default=None)):
-    acc = (accept or '') + ' ' + request.headers.get('accept', '')
-    if 'text/html' in acc:
-        body = """
-<div class="card">
-  <h1>✅ Selecta</h1>
-  <p class="subtitle">Service is running</p>
-  <div class="health-row"><span>Status</span><b class="ok">OK</b></div>
-  <div class="health-row"><span>Version</span><b>3.0</b></div>
-  <div class="health-row"><span>Database</span><b class="ok">Connected</b></div>
-  <a class="btn-back" href="/">← Home</a>
-</div>
-"""
-        return HTMLResponse(page_wrap('Health — Selecta', body))
+def health(request: Request):
+    accept = request.headers.get('accept', '')
+    if 'text/html' in accept:
+        body = (
+            '<div class="card" style="margin-top:16px;text-align:center">'
+            '<h1 style="color:#16a34a">&#10004; Selecta</h1>'
+            '<p class="subtitle">Service is running</p>'
+            '<div class="health-row"><span>Status</span><b class="ok">OK</b></div>'
+            '<div class="health-row"><span>Version</span><b>3.0</b></div>'
+            '<div class="health-row"><span>Database</span><b class="ok">Connected</b></div>'
+            '<a class="btn-back" href="/">&#8592; Home</a>'
+            '</div>'
+        )
+        return HTMLResponse(page_wrap('Health - Selecta', body))
     return JSONResponse({'status': 'ok', 'service': 'Selecta', 'version': '3.0'})
 
 
-# ============================================================
-# API: Jobs
-# ============================================================
+# ============ API: Jobs ============
 @app.post('/api/jobs')
 def create_job(job: Job, x_api_key: str | None = Header(default=None)):
     auth(x_api_key)
@@ -227,9 +222,7 @@ def list_jobs(x_api_key: str | None = Header(default=None)):
     return rows
 
 
-# ============================================================
-# API: Candidates (with duplicate prevention)
-# ============================================================
+# ============ API: Candidates ============
 @app.post('/api/jobs/{job_id}/candidates')
 async def candidates(
     job_id: str,
@@ -259,22 +252,26 @@ async def candidates(
 
         name, email, phone, skills, education, experience = parse_candidate(text)
 
-        # --- deduplicate by email ---
-        cid = None
+        # deduplicate by email OR filename
+        existing = None
         if email:
             existing = q_one(conn,
                 'SELECT id FROM candidates WHERE email=%s LIMIT 1',
                 (email,))
-            if existing:
-                cid = existing['id']
-                q_run(conn,
-                    '''UPDATE candidates
-                       SET filename=%s, name=%s, phone=%s, skills=%s,
-                           raw_text=%s
-                       WHERE id=%s''',
-                    (f.filename, name, phone, skills, text, cid))
+        if not existing:
+            existing = q_one(conn,
+                'SELECT id FROM candidates WHERE filename=%s LIMIT 1',
+                (f.filename,))
 
-        if not cid:
+        if existing:
+            cid = existing['id']
+            q_run(conn,
+                '''UPDATE candidates
+                   SET filename=%s, name=%s, email=%s, phone=%s,
+                       skills=%s, raw_text=%s
+                   WHERE id=%s''',
+                (f.filename, name, email, phone, skills, text, cid))
+        else:
             cid = str(uuid.uuid4())
             q_run(conn,
                 'INSERT INTO candidates VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
@@ -290,7 +287,6 @@ async def candidates(
             else 'reject'
         )
 
-        # --- deduplicate application ---
         app_existing = q_one(conn,
             'SELECT id FROM applications WHERE job_id=%s AND candidate_id=%s',
             (job_id, cid))
@@ -339,9 +335,7 @@ async def candidates(
     }
 
 
-# ============================================================
-# API: Results
-# ============================================================
+# ============ API: Results ============
 @app.get('/api/jobs/{job_id}/results')
 def results(
     job_id: str,
@@ -355,7 +349,7 @@ def results(
     if 'text/html' in accept:
         key = x_api_key or ''
         return RedirectResponse(
-            url=f'/results/{job_id}?x_api_key={key}',
+            url='/results/' + job_id + '?x_api_key=' + key,
             status_code=307
         )
 
@@ -382,9 +376,43 @@ def search(q: str, x_api_key: str | None = Header(default=None)):
     return rows
 
 
-# ============================================================
-# API: CSV Export
-# ============================================================
+# ============ API: Admin cleanup ============
+@app.get('/api/admin/cleanup')
+def admin_cleanup(x_api_key: str | None = Header(default=None)):
+    auth(x_api_key)
+    conn = db()
+    apps_del = 0
+    cands_del = 0
+    orphan_del = 0
+    try:
+        cur = conn.cursor()
+        cur.execute('''DELETE FROM applications a
+                       USING applications b
+                       WHERE a.id > b.id
+                         AND a.job_id = b.job_id
+                         AND a.candidate_id = b.candidate_id''')
+        apps_del = cur.rowcount
+        cur.execute('''DELETE FROM candidates a
+                       USING candidates b
+                       WHERE a.id > b.id
+                         AND a.filename = b.filename''')
+        cands_del = cur.rowcount
+        cur.execute('''DELETE FROM applications
+                       WHERE candidate_id NOT IN (SELECT id FROM candidates)''')
+        orphan_del = cur.rowcount
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return {
+        'duplicate_applications_removed': apps_del,
+        'duplicate_candidates_removed': cands_del,
+        'orphan_applications_removed': orphan_del,
+        'status': 'done'
+    }
+
+
+# ============ API: CSV Export ============
 @app.get('/api/jobs/{job_id}/export.csv')
 def export_csv(job_id: str, x_api_key: str | None = None):
     auth(x_api_key)
@@ -430,36 +458,35 @@ def export_csv(job_id: str, x_api_key: str | None = None):
         content=csv,
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition':
-                 f'attachment; filename="selecta_{job_id[:8]}.csv"'}
+                 'attachment; filename="selecta_' + job_id[:8] + '.csv"'}
     )
 
 
-# ============================================================
-# Shared CSS (fullscreen, no zoom)
-# ============================================================
+# ============ Shared CSS ============
 BASE_CSS = """
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html{width:100%;min-height:100%;font-size:16px}
+html{width:100%;min-height:100%}
 body{
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
   background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 50%,#bfdbfe 100%);
   color:#111;min-height:100vh;width:100%;overflow-x:hidden;
-  padding:16px;
-  padding-top:max(16px,env(safe-area-inset-top,16px));
-  padding-bottom:max(16px,env(safe-area-inset-bottom,16px));
+  padding:6px;
+  padding-top:max(6px,env(safe-area-inset-top,6px));
+  padding-bottom:max(6px,env(safe-area-inset-bottom,6px));
   -webkit-text-size-adjust:100%;
 }
-.wrap{width:100%;max-width:520px;margin:0 auto}
+.wrap{width:100%;max-width:100%;margin:0 auto}
+@media(min-width:700px){.wrap{max-width:600px}}
 .card{
-  background:#fff;border-radius:20px;padding:24px 20px;width:100%;
-  box-shadow:0 12px 40px rgba(30,64,175,.12),0 2px 8px rgba(30,64,175,.06);
+  background:#fff;border-radius:14px;padding:18px 14px;width:100%;
+  box-shadow:0 8px 30px rgba(30,64,175,.12),0 2px 6px rgba(30,64,175,.06);
 }
-h1{font-size:28px;color:#1e40af;text-align:center;margin-bottom:6px;font-weight:900}
-.subtitle{text-align:center;color:#64748b;font-size:13px;margin-bottom:22px;font-weight:600}
-.lang-switch{display:flex;justify-content:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+h1{font-size:26px;color:#1e40af;text-align:center;margin-bottom:4px;font-weight:900}
+.subtitle{text-align:center;color:#64748b;font-size:13px;margin-bottom:18px;font-weight:600}
+.lang-switch{display:flex;justify-content:center;gap:5px;margin-bottom:16px;flex-wrap:wrap}
 .lang-switch button{
-  padding:7px 12px;border:2px solid #e2e8f0;background:#f8fafc;
-  color:#64748b;border-radius:20px;font-size:12px;font-weight:700;
+  padding:6px 10px;border:2px solid #e2e8f0;background:#f8fafc;
+  color:#64748b;border-radius:18px;font-size:11px;font-weight:700;
   cursor:pointer;font-family:inherit;transition:all .15s;
 }
 .lang-switch button.active{background:#2563eb;color:#fff;border-color:#2563eb}
@@ -473,109 +500,108 @@ body[data-lang="fr"] .lang-fr.inline,
 body[data-lang="en"] .lang-en.inline{display:inline-block}
 body[data-lang="ar"]{direction:rtl;text-align:right}
 body[data-lang="fr"],body[data-lang="en"]{direction:ltr;text-align:left}
-.field{display:block;font-weight:700;font-size:14px;color:#374151;margin:16px 0 6px}
+.field{display:block;font-weight:700;font-size:14px;color:#374151;margin:14px 0 6px}
 input[type=text],input[type=password]{
-  width:100%;padding:14px;font-size:16px;border:2px solid #e2e8f0;
-  border-radius:12px;background:#f8fafc;font-family:inherit;transition:border .15s;
+  width:100%;padding:13px;font-size:16px;border:2px solid #e2e8f0;
+  border-radius:11px;background:#f8fafc;font-family:inherit;transition:border .15s;
 }
 input[type=text]:focus,input[type=password]:focus{
   outline:none;border-color:#3b82f6;background:#fff;
 }
 .file-btn{
-  display:flex;align-items:center;justify-content:center;padding:22px 14px;
-  background:#f0f9ff;border:2px dashed #60a5fa;border-radius:14px;
+  display:flex;align-items:center;justify-content:center;padding:20px 12px;
+  background:#f0f9ff;border:2px dashed #60a5fa;border-radius:12px;
   font-size:16px;font-weight:800;color:#1e40af;cursor:pointer;
   user-select:none;transition:background .15s;
 }
 .file-btn:active{background:#dbeafe}
 input[type=file]{display:none}
-.hint{font-size:12px;color:#64748b;text-align:center;margin-top:8px}
-.file-list{margin-top:14px;padding:12px;background:#f0fdf4;
-  border:2px solid #86efac;border-radius:12px;display:none}
+.hint{font-size:12px;color:#64748b;text-align:center;margin-top:6px}
+.file-list{margin-top:12px;padding:10px;background:#f0fdf4;
+  border:2px solid #86efac;border-radius:11px;display:none}
 .file-list.show{display:block}
-.file-list .title{font-size:13px;color:#166534;font-weight:800;margin-bottom:10px}
+.file-list .title{font-size:12px;color:#166534;font-weight:800;margin-bottom:8px}
 .file-item{display:flex;justify-content:space-between;align-items:center;
-  padding:8px 10px;background:#fff;border-radius:8px;margin-bottom:6px;
+  padding:7px 9px;background:#fff;border-radius:7px;margin-bottom:5px;
   font-size:13px;direction:ltr}
 .file-item:last-child{margin-bottom:0}
 .file-item .name{flex:1;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;color:#1e293b}
 .file-item .remove{color:#dc2626;font-weight:800;cursor:pointer;
   padding:0 8px;font-size:18px;line-height:1}
-button.main{width:100%;padding:18px;font-size:17px;
+button.main{width:100%;padding:16px;font-size:16px;
   background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;
-  border:none;border-radius:14px;font-weight:800;margin-top:20px;
+  border:none;border-radius:12px;font-weight:800;margin-top:16px;
   cursor:pointer;transition:transform .1s;font-family:inherit;
-  box-shadow:0 4px 16px rgba(37,99,235,.3)}
+  box-shadow:0 4px 14px rgba(37,99,235,.3)}
 button.main:active{transform:scale(.98)}
 button.main:disabled{background:#94a3b8;cursor:not-allowed;box-shadow:none}
-pre{background:#0f172a;color:#10b981;padding:14px;border-radius:12px;
-  font-size:12px;overflow-x:auto;max-height:300px;white-space:pre-wrap;
-  word-break:break-all;margin-top:8px;direction:ltr;text-align:left;
+pre{background:#0f172a;color:#10b981;padding:12px;border-radius:10px;
+  font-size:12px;overflow-x:auto;max-height:280px;white-space:pre-wrap;
+  word-break:break-all;margin-top:6px;direction:ltr;text-align:left;
   font-family:monospace}
 ul.menu{list-style:none}
-ul.menu li{margin-bottom:10px}
+ul.menu li{margin-bottom:9px}
 ul.menu li a{display:flex;align-items:center;justify-content:space-between;
-  padding:16px 20px;background:#f8fafc;border:2px solid #e2e8f0;
-  border-radius:14px;text-decoration:none;color:#1e293b;font-weight:700;
+  padding:15px 18px;background:#f8fafc;border:2px solid #e2e8f0;
+  border-radius:12px;text-decoration:none;color:#1e293b;font-weight:700;
   font-size:16px;transition:all .15s}
 ul.menu li a:active{background:#dbeafe;border-color:#3b82f6;transform:scale(.98)}
 ul.menu li a.primary{background:linear-gradient(135deg,#2563eb,#1d4ed8);
-  border:none;color:#fff;font-size:17px;box-shadow:0 4px 16px rgba(37,99,235,.35)}
+  border:none;color:#fff;font-size:17px;box-shadow:0 4px 14px rgba(37,99,235,.35)}
 ul.menu li a.primary:active{background:#1e40af}
 ul.menu .icon{font-size:22px}
 .status{text-align:center;color:#059669;font-weight:700;font-size:14px;
-  margin-bottom:24px;display:flex;align-items:center;justify-content:center;gap:6px}
+  margin-bottom:20px;display:flex;align-items:center;justify-content:center;gap:6px}
 .status::before{content:'';width:8px;height:8px;background:#10b981;
   border-radius:50%;box-shadow:0 0 0 3px rgba(16,185,129,.2)}
 .health-row{display:flex;justify-content:space-between;align-items:center;
-  padding:14px 16px;background:#f8fafc;border-radius:12px;margin-bottom:10px;
+  padding:13px 15px;background:#f8fafc;border-radius:11px;margin-bottom:9px;
   font-size:15px}
 .health-row b{color:#1e40af}
 .health-row b.ok{color:#16a34a}
-.btn-back{display:block;text-align:center;margin-top:20px;padding:14px;
-  background:#2563eb;color:#fff;border-radius:12px;text-decoration:none;
+.btn-back{display:block;text-align:center;margin-top:18px;padding:13px;
+  background:#2563eb;color:#fff;border-radius:11px;text-decoration:none;
   font-weight:700}
-/* Results page */
-.r-header{background:#fff;border-radius:20px;padding:22px;margin-bottom:16px;
-  box-shadow:0 12px 40px rgba(30,64,175,.12)}
-.r-header h1{font-size:22px;margin-bottom:12px}
+.r-header{background:#fff;border-radius:14px;padding:18px;margin-bottom:14px;
+  box-shadow:0 8px 30px rgba(30,64,175,.12)}
+.r-header h1{font-size:21px;margin-bottom:10px}
 .job-title{font-size:16px;color:#0f172a;font-weight:800;text-align:center;
   margin-bottom:6px;word-break:break-word}
-.must-have{font-size:13px;color:#64748b;text-align:center;margin-bottom:18px;
+.must-have{font-size:13px;color:#64748b;text-align:center;margin-bottom:16px;
   word-break:break-word}
-.stats{display:flex;gap:8px}
-.stat{flex:1;text-align:center;padding:12px 6px;border-radius:12px;
+.stats{display:flex;gap:7px}
+.stat{flex:1;text-align:center;padding:11px 5px;border-radius:11px;
   font-size:12px;font-weight:800}
-.stat .num{display:block;font-size:24px;margin-bottom:2px}
+.stat .num{display:block;font-size:22px;margin-bottom:2px}
 .stat.green{background:#dcfce7;color:#166534}
 .stat.yellow{background:#fef3c7;color:#92400e}
 .stat.red{background:#fee2e2;color:#991b1b}
-.r-card{background:#fff;border-radius:16px;padding:18px;margin-bottom:12px;
-  position:relative;box-shadow:0 2px 12px rgba(0,0,0,.06)}
-.r-rank{position:absolute;top:14px;left:14px;color:#fff;font-weight:800;
-  font-size:13px;padding:4px 12px;border-radius:20px;z-index:1}
-[dir="rtl"] .r-rank{left:auto;right:14px}
-.r-name{font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;
-  padding-left:55px}
-[dir="rtl"] .r-name{padding-left:0;padding-right:55px}
-.r-score{font-size:30px;font-weight:900}
-.r-score-label{font-size:13px;color:#94a3b8;margin-left:4px}
+.r-card{background:#fff;border-radius:13px;padding:16px;margin-bottom:10px;
+  position:relative;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.r-rank{position:absolute;top:12px;left:12px;color:#fff;font-weight:800;
+  font-size:12px;padding:4px 11px;border-radius:18px;z-index:1}
+[dir="rtl"] .r-rank{left:auto;right:12px}
+.r-name{font-size:16px;font-weight:800;color:#0f172a;margin-bottom:6px;
+  padding-left:52px}
+[dir="rtl"] .r-name{padding-left:0;padding-right:52px}
+.r-score{font-size:28px;font-weight:900}
+.r-score-label{font-size:12px;color:#94a3b8;margin-left:4px}
 [dir="rtl"] .r-score-label{margin-left:0;margin-right:4px}
-.r-status{font-size:14px;font-weight:800;margin-bottom:10px}
-.r-meta{font-size:13px;color:#475569;margin-top:4px;word-break:break-all;
+.r-status{font-size:14px;font-weight:800;margin-bottom:8px}
+.r-meta{font-size:13px;color:#475569;margin-top:3px;word-break:break-all;
   direction:ltr;text-align:left}
-.r-missing{font-size:13px;color:#991b1b;margin-top:10px;padding:10px 12px;
-  background:#fff;border-radius:8px;border-left:3px solid #dc2626}
+.r-missing{font-size:13px;color:#991b1b;margin-top:8px;padding:9px 11px;
+  background:#fff;border-radius:7px;border-left:3px solid #dc2626}
 [dir="rtl"] .r-missing{border-left:none;border-right:3px solid #dc2626}
 .r-missing.ok{color:#166534}
 [dir="rtl"] .r-missing.ok{border-right-color:#16a34a}
 [dir="ltr"] .r-missing.ok{border-left-color:#16a34a}
-.empty{text-align:center;padding:60px 20px;color:#64748b;background:#fff;
-  border-radius:16px;font-size:15px}
-.actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
-.btn{flex:1;min-width:140px;text-align:center;padding:16px 20px;
-  border-radius:14px;text-decoration:none;font-weight:800;font-size:15px;
+.empty{text-align:center;padding:50px 18px;color:#64748b;background:#fff;
+  border-radius:13px;font-size:15px}
+.actions{display:flex;gap:9px;margin-top:16px;flex-wrap:wrap}
+.btn{flex:1;min-width:130px;text-align:center;padding:15px 18px;
+  border-radius:12px;text-decoration:none;font-weight:800;font-size:15px;
   transition:transform .1s}
 .btn:active{transform:scale(.97)}
 .btn.green{background:linear-gradient(135deg,#16a34a,#15803d);color:#fff}
@@ -602,16 +628,16 @@ function setLang(l){
 """
 
 
-LANG_SWITCH = """
-<div class="lang-switch">
-  <button data-lang="ar" onclick="setLang('ar')">🇹🇳 عربي</button>
-  <button data-lang="fr" onclick="setLang('fr')">🇫🇷 Français</button>
-  <button data-lang="en" onclick="setLang('en')">🇬🇧 English</button>
-</div>
-"""
+LANG_SWITCH = (
+    '<div class="lang-switch">'
+    '<button data-lang="ar" onclick="setLang(\'ar\')">&#127481;&#127475; &#1593;&#1585;&#1576;&#1610;</button>'
+    '<button data-lang="fr" onclick="setLang(\'fr\')">&#127467;&#127479; Fran&ccedil;ais</button>'
+    '<button data-lang="en" onclick="setLang(\'en\')">&#127468;&#127463; English</button>'
+    '</div>'
+)
 
 
-def page_wrap(title, body_html, extra_js=''):
+def page_wrap(title, body, extra_js=''):
     return (
         '<!DOCTYPE html>\n'
         '<html lang="ar" dir="rtl">\n'
@@ -619,128 +645,125 @@ def page_wrap(title, body_html, extra_js=''):
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">\n'
         '<meta name="theme-color" content="#2563eb">\n'
-        f'<title>{title}</title>\n'
+        '<title>' + title + '</title>\n'
         '<style>\n' + BASE_CSS + '\n</style>\n'
         '</head>\n'
         '<body data-lang="ar">\n'
-        '<div class="wrap">\n' + body_html + '\n</div>\n'
+        '<div class="wrap">\n' + body + '\n</div>\n'
         '<script>\n' + LANG_JS + '\n' + extra_js + '\n</script>\n'
         '</body>\n'
         '</html>'
     )
 
 
-# ============================================================
-# Page: Home
-# ============================================================
+# ============ Page: Home ============
 @app.get('/', response_class=HTMLResponse)
 def root():
-    body = LANG_SWITCH + """
-<div class="card" style="margin-top:16px">
-  <h1>🎯 Selecta</h1>
-  <p class="subtitle">
-    <span class="lang-ar inline">فرز ذكي للسير الذاتية</span>
-    <span class="lang-fr inline">Tri intelligent de CV</span>
-    <span class="lang-en inline">Smart CV Ranking</span>
-  </p>
-  <p class="status">
-    <span class="lang-ar inline">الخدمة تعمل</span>
-    <span class="lang-fr inline">Service en ligne</span>
-    <span class="lang-en inline">Service online</span>
-  </p>
-  <ul class="menu">
-    <li><a class="primary" href="/upload">
-      <span class="lang-ar inline">رفع السير الذاتية</span>
-      <span class="lang-fr inline">Téléverser des CV</span>
-      <span class="lang-en inline">Upload CVs</span>
-      <span class="icon">📄</span>
-    </a></li>
-    <li><a href="/docs">
-      <span class="lang-ar inline">واجهة API</span>
-      <span class="lang-fr inline">API (Swagger)</span>
-      <span class="lang-en inline">API (Swagger)</span>
-      <span class="icon">📚</span>
-    </a></li>
-    <li><a href="/health">
-      <span class="lang-ar inline">فحص الحالة</span>
-      <span class="lang-fr inline">État du service</span>
-      <span class="lang-en inline">Health check</span>
-      <span class="icon">💚</span>
-    </a></li>
-  </ul>
-</div>
-"""
+    body = LANG_SWITCH + (
+        '<div class="card" style="margin-top:12px">'
+        '<h1>&#127919; Selecta</h1>'
+        '<p class="subtitle">'
+        '<span class="lang-ar inline">&#1601;&#1585;&#1586; &#1584;&#1603;&#1610; &#1604;&#1604;&#1587;&#1610;&#1585; &#1575;&#1604;&#1584;&#1575;&#1578;&#1610;&#1577;</span>'
+        '<span class="lang-fr inline">Tri intelligent de CV</span>'
+        '<span class="lang-en inline">Smart CV Ranking</span>'
+        '</p>'
+        '<p class="status">'
+        '<span class="lang-ar inline">&#1575;&#1604;&#1582;&#1583;&#1605;&#1577; &#1578;&#1593;&#1605;&#1604;</span>'
+        '<span class="lang-fr inline">Service en ligne</span>'
+        '<span class="lang-en inline">Service online</span>'
+        '</p>'
+        '<ul class="menu">'
+        '<li><a class="primary" href="/upload">'
+        '<span class="lang-ar inline">&#1585;&#1601;&#1593; &#1575;&#1604;&#1587;&#1610;&#1585; &#1575;&#1604;&#1584;&#1575;&#1578;&#1610;&#1577;</span>'
+        '<span class="lang-fr inline">T&eacute;l&eacute;verser des CV</span>'
+        '<span class="lang-en inline">Upload CVs</span>'
+        '<span class="icon">&#128196;</span>'
+        '</a></li>'
+        '<li><a href="/docs">'
+        '<span class="lang-ar inline">&#1608;&#1575;&#1580;&#1607;&#1577; API</span>'
+        '<span class="lang-fr inline">API (Swagger)</span>'
+        '<span class="lang-en inline">API (Swagger)</span>'
+        '<span class="icon">&#128218;</span>'
+        '</a></li>'
+        '<li><a href="/health">'
+        '<span class="lang-ar inline">&#1601;&#1581;&#1589; &#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</span>'
+        '<span class="lang-fr inline">&Eacute;tat du service</span>'
+        '<span class="lang-en inline">Health check</span>'
+        '<span class="icon">&#128154;</span>'
+        '</a></li>'
+        '</ul>'
+        '</div>'
+    )
     return HTMLResponse(page_wrap('Selecta', body))
 
 
-# ============================================================
-# Page: Upload
-# ============================================================
+# ============ Page: Upload ============
 @app.get('/upload', response_class=HTMLResponse)
 def upload_page():
-    body = LANG_SWITCH + """
-<div class="card" style="margin-top:16px">
-  <h1>🎯 Selecta</h1>
-  <p class="subtitle">
-    <span class="lang-ar inline">رفع السير الذاتية</span>
-    <span class="lang-fr inline">Téléverser des CV</span>
-    <span class="lang-en inline">Upload CVs</span>
-  </p>
+    body = LANG_SWITCH + (
+        '<div class="card" style="margin-top:12px">'
+        '<h1>&#127919; Selecta</h1>'
+        '<p class="subtitle">'
+        '<span class="lang-ar inline">&#1585;&#1601;&#1593; &#1575;&#1604;&#1587;&#1610;&#1585; &#1575;&#1604;&#1584;&#1575;&#1578;&#1610;&#1577;</span>'
+        '<span class="lang-fr inline">T&eacute;l&eacute;verser des CV</span>'
+        '<span class="lang-en inline">Upload CVs</span>'
+        '</p>'
 
-  <label class="field">
-    <span class="lang-ar inline">معرّف الوظيفة</span>
-    <span class="lang-fr inline">Identifiant de offre</span>
-    <span class="lang-en inline">Job ID</span>
-  </label>
-  <input id="job_id" type="text" placeholder="c9d62982-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+        '<label class="field">'
+        '<span class="lang-ar inline">&#1605;&#1593;&#1585;&#1617;&#1601; &#1575;&#1604;&#1608;&#1592;&#1610;&#1601;&#1577;</span>'
+        '<span class="lang-fr inline">Identifiant de l\'offre</span>'
+        '<span class="lang-en inline">Job ID</span>'
+        '</label>'
+        '<input id="job_id" type="text" placeholder="c9d62982-..." autocomplete="off" autocapitalize="off" spellcheck="false">'
 
-  <label class="field">
-    <span class="lang-ar inline">مفتاح API</span>
-    <span class="lang-fr inline">Clé API</span>
-    <span class="lang-en inline">API Key</span>
-  </label>
-  <input id="api_key" type="password" placeholder="..." autocomplete="off">
+        '<label class="field">'
+        '<span class="lang-ar inline">&#1605;&#1601;&#1578;&#1575;&#1581; API</span>'
+        '<span class="lang-fr inline">Cl&eacute; API</span>'
+        '<span class="lang-en inline">API Key</span>'
+        '</label>'
+        '<input id="api_key" type="password" placeholder="..." autocomplete="off">'
 
-  <label class="field">
-    <span class="lang-ar inline">ملفات السير الذاتية (PDF, DOCX, TXT)</span>
-    <span class="lang-fr inline">Fichiers CV (PDF, DOCX, TXT)</span>
-    <span class="lang-en inline">CV files (PDF, DOCX, TXT)</span>
-  </label>
-  <label for="filePicker" class="file-btn">
-    <span class="lang-ar inline">📎 اضغط لاختيار ملف</span>
-    <span class="lang-fr inline">📎 Choisir un fichier</span>
-    <span class="lang-en inline">📎 Choose a file</span>
-  </label>
-  <input id="filePicker" type="file">
-  <p class="hint">
-    <span class="lang-ar inline">يمكنك إضافة عدة ملفات — اضغط الزر عدة مرات</span>
-    <span class="lang-fr inline">Plusieurs fichiers — cliquez plusieurs fois</span>
-    <span class="lang-en inline">Multiple files — click multiple times</span>
-  </p>
+        '<label class="field">'
+        '<span class="lang-ar inline">&#1605;&#1604;&#1601;&#1575;&#1578; &#1575;&#1604;&#1587;&#1610;&#1585; &#1575;&#1604;&#1584;&#1575;&#1578;&#1610;&#1577; (PDF, DOCX, TXT)</span>'
+        '<span class="lang-fr inline">Fichiers CV (PDF, DOCX, TXT)</span>'
+        '<span class="lang-en inline">CV files (PDF, DOCX, TXT)</span>'
+        '</label>'
+        '<label for="filePicker" class="file-btn">'
+        '<span class="lang-ar inline">&#128206; &#1575;&#1590;&#1594;&#1591; &#1604;&#1575;&#1582;&#1578;&#1610;&#1575;&#1585; &#1605;&#1604;&#1601;</span>'
+        '<span class="lang-fr inline">&#128206; Choisir un fichier</span>'
+        '<span class="lang-en inline">&#128206; Choose a file</span>'
+        '</label>'
+        '<input id="filePicker" type="file">'
+        '<p class="hint">'
+        '<span class="lang-ar inline">&#1610;&#1605;&#1603;&#1606;&#1603; &#1573;&#1590;&#1575;&#1601;&#1577; &#1593;&#1583;&#1577; &#1605;&#1604;&#1601;&#1575;&#1578;</span>'
+        '<span class="lang-fr inline">Plusieurs fichiers possibles</span>'
+        '<span class="lang-en inline">Multiple files allowed</span>'
+        '</p>'
 
-  <div class="file-list" id="fileList">
-    <div class="title">
-      <span class="lang-ar inline">✅ الملفات المختارة (<span id="cnt-ar">0</span>)</span>
-      <span class="lang-fr inline">✅ Fichiers sélectionnés (<span id="cnt-fr">0</span>)</span>
-      <span class="lang-en inline">✅ Selected files (<span id="cnt-en">0</span>)</span>
-    </div>
-    <div id="items"></div>
-  </div>
+        '<div class="file-list" id="fileList">'
+        '<div class="title">'
+        '<span class="lang-ar inline">&#9989; &#1575;&#1604;&#1605;&#1604;&#1601;&#1575;&#1578; &#1575;&#1604;&#1605;&#1582;&#1578;&#1575;&#1585;&#1577; (<span id="cnt-ar">0</span>)</span>'
+        '<span class="lang-fr inline">&#9989; Fichiers (<span id="cnt-fr">0</span>)</span>'
+        '<span class="lang-en inline">&#9989; Files (<span id="cnt-en">0</span>)</span>'
+        '</div>'
+        '<div id="items"></div>'
+        '</div>'
 
-  <button class="main" id="uploadBtn" onclick="doUpload()">
-    <span class="lang-ar inline">🚀 ارفع وقيّم</span>
-    <span class="lang-fr inline">🚀 Téléverser et évaluer</span>
-    <span class="lang-en inline">🚀 Upload and rank</span>
-  </button>
+        '<button class="main" id="uploadBtn" onclick="doUpload()">'
+        '<span class="lang-ar inline">&#128640; &#1575;&#1585;&#1601;&#1593; &#1608;&#1602;&#1610;&#1617;&#1605;</span>'
+        '<span class="lang-fr inline">&#128640; T&eacute;l&eacute;verser</span>'
+        '<span class="lang-en inline">&#128640; Upload and rank</span>'
+        '</button>'
 
-  <label class="field">
-    <span class="lang-ar inline">النتيجة</span>
-    <span class="lang-fr inline">Résultat</span>
-    <span class="lang-en inline">Result</span>
-  </label>
-  <pre id="result">—</pre>
-</div>
-"""
+        '<label class="field">'
+        '<span class="lang-ar inline">&#1575;&#1604;&#1606;&#1578;&#1610;&#1580;&#1577;</span>'
+        '<span class="lang-fr inline">R&eacute;sultat</span>'
+        '<span class="lang-en inline">Result</span>'
+        '</label>'
+        '<pre id="result">&mdash;</pre>'
+        '</div>'
+    )
+
     extra_js = """
 var pickedFiles = [];
 var picker = document.getElementById('filePicker');
@@ -773,7 +796,7 @@ function renderList(){
       nm.textContent = (idx+1) + '. ' + f.name;
       var rm = document.createElement('span');
       rm.className = 'remove';
-      rm.textContent = '✕';
+      rm.textContent = '\u2715';
       rm.onclick = function(){ pickedFiles.splice(idx, 1); renderList(); };
       row.appendChild(nm);
       row.appendChild(rm);
@@ -805,19 +828,27 @@ function cleanInput(s){
 function msg(key){
   var L = document.body.getAttribute('data-lang') || 'ar';
   var M = {
-    fill: {ar:'املأ معرّف الوظيفة ومفتاح API',
-           fr:'Remplissez ID et clé API',
-           en:'Fill Job ID and API Key'},
-    pick: {ar:'اختر ملفا واحدا على الأقل',
-           fr:'Choisissez au moins un fichier',
-           en:'Choose at least one file'},
-    up:   {ar:'جارٍ رفع ', fr:'Téléversement de ', en:'Uploading '},
-    up2:  {ar:' ملف...', fr:' fichier(s)...', en:' file(s)...'},
-    ok:   {ar:'تم رفع ', fr:'', en:''},
-    ok2:  {ar:' ملف بنجاح. جارٍ التحويل...',
-           fr:' fichier(s) téléversé(s). Redirection...',
-           en:' file(s) uploaded. Redirecting...'},
-    err:  {ar:'خطأ: ', fr:'Erreur: ', en:'Error: '}
+    fill: {ar:'\\u0627\\u0645\\u0644\\u0623 \\u0627\\u0644\\u062d\\u0642\\u0648\\u0644',
+           fr:'Remplissez les champs',
+           en:'Fill all fields'},
+    pick: {ar:'\\u0627\\u062e\\u062a\\u0631 \\u0645\\u0644\\u0641\\u0627',
+           fr:'Choisissez un fichier',
+           en:'Choose a file'},
+    up:   {ar:'\\u062c\\u0627\\u0631\\u064d \\u0627\\u0644\\u0631\\u0641\\u0639 ',
+           fr:'T\\u00e9l\\u00e9versement ',
+           en:'Uploading '},
+    up2:  {ar:' \\u0645\\u0644\\u0641...',
+           fr:' fichier(s)...',
+           en:' file(s)...'},
+    ok:   {ar:'\\u062a\\u0645 \\u0631\\u0641\\u0639 ',
+           fr:'',
+           en:''},
+    ok2:  {ar:' \\u0645\\u0644\\u0641. \\u062c\\u0627\\u0631\\u064d \\u0627\\u0644\\u062a\\u062d\\u0648\\u064a\\u0644...',
+           fr:' fichier(s). Redirection...',
+           en:' file(s). Redirecting...'},
+    err:  {ar:'\\u062e\\u0637\\u0623: ',
+           fr:'Erreur: ',
+           en:'Error: '}
   };
   return (M[key][L] || M[key].ar);
 }
@@ -860,12 +891,10 @@ async function doUpload(){
   }
 }
 """
-    return HTMLResponse(page_wrap('Selecta — Upload', body, extra_js))
+    return HTMLResponse(page_wrap('Selecta - Upload', body, extra_js))
 
 
-# ============================================================
-# Page: Results
-# ============================================================
+# ============ Page: Results ============
 @app.get('/results/{job_id}', response_class=HTMLResponse)
 def results_page(job_id: str, x_api_key: str | None = None):
     auth(x_api_key)
@@ -875,21 +904,21 @@ def results_page(job_id: str, x_api_key: str | None = None):
     job = q_one(conn, 'SELECT * FROM jobs WHERE id=%s', (job_id,))
     if not job:
         conn.close()
-        body = """
-<div class="card" style="text-align:center">
-  <h1 style="color:#dc2626">❌</h1>
-  <p class="subtitle">
-    <span class="lang-ar inline">الوظيفة غير موجودة</span>
-    <span class="lang-fr inline">Offre introuvable</span>
-    <span class="lang-en inline">Job not found</span>
-  </p>
-  <a class="btn-back" href="/upload">
-    <span class="lang-ar inline">← العودة للرفع</span>
-    <span class="lang-fr inline">← Retour au téléversement</span>
-    <span class="lang-en inline">← Back to upload</span>
-  </a>
-</div>
-"""
+        body = (
+            '<div class="card" style="text-align:center;margin-top:16px">'
+            '<h1 style="color:#dc2626">&#10060;</h1>'
+            '<p class="subtitle">'
+            '<span class="lang-ar inline">&#1575;&#1604;&#1608;&#1592;&#1610;&#1601;&#1577; &#1594;&#1610;&#1585; &#1605;&#1608;&#1580;&#1608;&#1583;&#1577;</span>'
+            '<span class="lang-fr inline">Offre introuvable</span>'
+            '<span class="lang-en inline">Job not found</span>'
+            '</p>'
+            '<a class="btn-back" href="/upload">'
+            '<span class="lang-ar inline">&#8592; &#1575;&#1604;&#1593;&#1608;&#1583;&#1577;</span>'
+            '<span class="lang-fr inline">&#8592; Retour</span>'
+            '<span class="lang-en inline">&#8592; Back</span>'
+            '</a>'
+            '</div>'
+        )
         return HTMLResponse(page_wrap('Not found', LANG_SWITCH + body), status_code=404)
 
     rows = q_all(conn,
@@ -911,120 +940,126 @@ def results_page(job_id: str, x_api_key: str | None = None):
 
         if status == 'shortlist':
             shortlist += 1
-            color = '#16a34a'; bg = '#f0fdf4'; icon = '✅'
+            color = '#16a34a'; bg = '#f0fdf4'; icon = '&#9989;'
         elif status == 'review':
             review += 1
-            color = '#f59e0b'; bg = '#fffbeb'; icon = '🟡'
+            color = '#f59e0b'; bg = '#fffbeb'; icon = '&#128993;'
         else:
             reject += 1
-            color = '#dc2626'; bg = '#fef2f2'; icon = '❌'
+            color = '#dc2626'; bg = '#fef2f2'; icon = '&#10060;'
 
         missing = (r['missing'] or '').strip()
         if missing:
             miss_inner = (
-                '<span class="lang-ar inline">⚠ ناقص: ' + missing.replace(',', '، ') + '</span>'
-                '<span class="lang-fr inline">⚠ Manquant: ' + missing.replace(',', ', ') + '</span>'
-                '<span class="lang-en inline">⚠ Missing: ' + missing.replace(',', ', ') + '</span>'
+                '<span class="lang-ar inline">&#9888; &#1606;&#1575;&#1602;&#1589;: ' + missing.replace(',', '\u060C ') + '</span>'
+                '<span class="lang-fr inline">&#9888; Manquant: ' + missing.replace(',', ', ') + '</span>'
+                '<span class="lang-en inline">&#9888; Missing: ' + missing.replace(',', ', ') + '</span>'
             )
             miss_class = 'r-missing'
         else:
             miss_inner = (
-                '<span class="lang-ar inline">✓ جميع المهارات موجودة</span>'
-                '<span class="lang-fr inline">✓ Toutes les compétences présentes</span>'
-                '<span class="lang-en inline">✓ All skills present</span>'
+                '<span class="lang-ar inline">&#10003; &#1580;&#1605;&#1610;&#1593; &#1575;&#1604;&#1605;&#1607;&#1575;&#1585;&#1575;&#1578; &#1605;&#1608;&#1580;&#1608;&#1583;&#1577;</span>'
+                '<span class="lang-fr inline">&#10003; Toutes pr&eacute;sentes</span>'
+                '<span class="lang-en inline">&#10003; All present</span>'
             )
             miss_class = 'r-missing ok'
 
         if status == 'shortlist':
-            st_html = ('<span class="lang-ar inline">مؤهل — يوصى بمقابلته</span>'
-                       '<span class="lang-fr inline">Qualifié — à convoquer</span>'
-                       '<span class="lang-en inline">Qualified — recommend interview</span>')
+            st_html = (
+                '<span class="lang-ar inline">&#1605;&#1572;&#1607;&#1604;</span>'
+                '<span class="lang-fr inline">Qualifi&eacute;</span>'
+                '<span class="lang-en inline">Qualified</span>'
+            )
         elif status == 'review':
-            st_html = ('<span class="lang-ar inline">يحتاج مراجعة</span>'
-                       '<span class="lang-fr inline">À examiner</span>'
-                       '<span class="lang-en inline">Needs review</span>')
+            st_html = (
+                '<span class="lang-ar inline">&#1610;&#1581;&#1578;&#1575;&#1580; &#1605;&#1585;&#1575;&#1580;&#1593;&#1577;</span>'
+                '<span class="lang-fr inline">&Agrave; examiner</span>'
+                '<span class="lang-en inline">Needs review</span>'
+            )
         else:
-            st_html = ('<span class="lang-ar inline">مرفوض</span>'
-                       '<span class="lang-fr inline">Rejeté</span>'
-                       '<span class="lang-en inline">Rejected</span>')
+            st_html = (
+                '<span class="lang-ar inline">&#1605;&#1585;&#1601;&#1608;&#1590;</span>'
+                '<span class="lang-fr inline">Rejet&eacute;</span>'
+                '<span class="lang-en inline">Rejected</span>'
+            )
 
-        name = r['name'] or '?'
-        email = r['email'] or '—'
-        filename = r['filename'] or '—'
+        nm = r['name'] or '?'
+        em = r['email'] or '&mdash;'
+        fn = r['filename'] or '&mdash;'
 
         rows_html += (
-            f'<div class="r-card" style="background:{bg};'
-            f'border-{"right" if True else "left"}:6px solid {color}">'
-            f'<div class="r-rank" style="background:{color}">#{i}</div>'
-            f'<div class="r-name">{icon} {name}</div>'
-            f'<div><span class="r-score" style="color:{color}">{score}</span>'
-            f'<span class="r-score-label">/ 100</span></div>'
-            f'<div class="r-status" style="color:{color}">{st_html}</div>'
-            f'<div class="r-meta">📧 {email}</div>'
-            f'<div class="r-meta">📄 {filename}</div>'
-            f'<div class="{miss_class}">{miss_inner}</div>'
-            f'</div>'
+            '<div class="r-card" style="background:' + bg + ';'
+            'border-right:6px solid ' + color + '">'
+            '<div class="r-rank" style="background:' + color + '">#' + str(i) + '</div>'
+            '<div class="r-name">' + icon + ' ' + nm + '</div>'
+            '<div><span class="r-score" style="color:' + color + '">' + str(score) + '</span>'
+            '<span class="r-score-label">/ 100</span></div>'
+            '<div class="r-status" style="color:' + color + '">' + st_html + '</div>'
+            '<div class="r-meta">&#128231; ' + em + '</div>'
+            '<div class="r-meta">&#128196; ' + fn + '</div>'
+            '<div class="' + miss_class + '">' + miss_inner + '</div>'
+            '</div>'
         )
 
     if not rows:
-        rows_html = ('<div class="empty">'
-                     '<span class="lang-ar inline">لا يوجد مرشحون بعد</span>'
-                     '<span class="lang-fr inline">Aucun candidat pour le moment</span>'
-                     '<span class="lang-en inline">No candidates yet</span>'
-                     '</div>')
+        rows_html = (
+            '<div class="empty">'
+            '<span class="lang-ar inline">&#1604;&#1575; &#1610;&#1608;&#1580;&#1583; &#1605;&#1585;&#1588;&#1581;&#1608;&#1606;</span>'
+            '<span class="lang-fr inline">Aucun candidat</span>'
+            '<span class="lang-en inline">No candidates yet</span>'
+            '</div>'
+        )
 
-    title = job['title'] or '—'
-    must = job['must_have'] or '—'
+    title = job['title'] or '&mdash;'
+    must = job['must_have'] or '&mdash;'
     key_q = x_api_key or ''
 
     header = (
         '<div class="r-header">'
         + LANG_SWITCH +
         '<h1>'
-        '<span class="lang-ar inline">📊 نتائج الفرز</span>'
-        '<span class="lang-fr inline">📊 Résultats du tri</span>'
-        '<span class="lang-en inline">📊 Ranking results</span>'
+        '<span class="lang-ar inline">&#128202; &#1606;&#1578;&#1575;&#1574;&#1580; &#1575;&#1604;&#1601;&#1585;&#1586;</span>'
+        '<span class="lang-fr inline">&#128202; R&eacute;sultats du tri</span>'
+        '<span class="lang-en inline">&#128202; Ranking results</span>'
         '</h1>'
-        f'<div class="job-title">💼 {title}</div>'
-        f'<div class="must-have">🎯 {must}</div>'
+        '<div class="job-title">&#128188; ' + title + '</div>'
+        '<div class="must-have">&#127919; ' + must + '</div>'
         '<div class="stats">'
-        f'<div class="stat green"><span class="num">{shortlist}</span>'
-        '<span class="lang-ar inline">مؤهل</span>'
-        '<span class="lang-fr inline">Qualifiés</span>'
+        '<div class="stat green"><span class="num">' + str(shortlist) + '</span>'
+        '<span class="lang-ar inline">&#1605;&#1572;&#1607;&#1604;</span>'
+        '<span class="lang-fr inline">Qualifi&eacute;s</span>'
         '<span class="lang-en inline">Qualified</span></div>'
-        f'<div class="stat yellow"><span class="num">{review}</span>'
-        '<span class="lang-ar inline">مراجعة</span>'
-        '<span class="lang-fr inline">À revoir</span>'
+        '<div class="stat yellow"><span class="num">' + str(review) + '</span>'
+        '<span class="lang-ar inline">&#1605;&#1585;&#1575;&#1580;&#1593;&#1577;</span>'
+        '<span class="lang-fr inline">&Agrave; revoir</span>'
         '<span class="lang-en inline">Review</span></div>'
-        f'<div class="stat red"><span class="num">{reject}</span>'
-        '<span class="lang-ar inline">مرفوض</span>'
-        '<span class="lang-fr inline">Rejetés</span>'
+        '<div class="stat red"><span class="num">' + str(reject) + '</span>'
+        '<span class="lang-ar inline">&#1605;&#1585;&#1601;&#1608;&#1590;</span>'
+        '<span class="lang-fr inline">Rejet&eacute;s</span>'
         '<span class="lang-en inline">Rejected</span></div>'
         '</div></div>'
     )
 
     actions = (
         '<div class="actions">'
-        f'<a class="btn green" href="/api/jobs/{job_id}/export.csv?x_api_key={key_q}">'
-        '<span class="lang-ar inline">📥 تحميل Excel</span>'
-        '<span class="lang-fr inline">📥 Télécharger Excel</span>'
-        '<span class="lang-en inline">📥 Download Excel</span>'
+        '<a class="btn green" href="/api/jobs/' + job_id + '/export.csv?x_api_key=' + key_q + '">'
+        '<span class="lang-ar inline">&#128229; &#1578;&#1581;&#1605;&#1610;&#1604; Excel</span>'
+        '<span class="lang-fr inline">&#128229; T&eacute;l&eacute;charger Excel</span>'
+        '<span class="lang-en inline">&#128229; Download Excel</span>'
         '</a>'
         '<a class="btn blue" href="/upload">'
-        '<span class="lang-ar inline">🔄 رفع ملفات جديدة</span>'
-        '<span class="lang-fr inline">🔄 Nouveaux fichiers</span>'
-        '<span class="lang-en inline">🔄 Upload new files</span>'
+        '<span class="lang-ar inline">&#128260; &#1605;&#1604;&#1601;&#1575;&#1578; &#1580;&#1583;&#1610;&#1583;&#1577;</span>'
+        '<span class="lang-fr inline">&#128260; Nouveaux fichiers</span>'
+        '<span class="lang-en inline">&#128260; New files</span>'
         '</a>'
         '</div>'
     )
 
     body = header + rows_html + actions
-    return HTMLResponse(page_wrap('Selecta — Results', body))
+    return HTMLResponse(page_wrap('Selecta - Results', body))
 
 
-# ============================================================
-# OpenAPI fix for Swagger file upload
-# ============================================================
+# ============ OpenAPI fix ============
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
